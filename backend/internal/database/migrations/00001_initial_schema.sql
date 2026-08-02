@@ -1,8 +1,4 @@
--- schema.sql
-
--- Enable UUID extension
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
+-- +goose Up
 -- Roles table for access control
 CREATE TABLE IF NOT EXISTS roles (
     id TEXT PRIMARY KEY,
@@ -14,10 +10,6 @@ CREATE TABLE IF NOT EXISTS roles (
 );
 
 -- Users table (Allow-list for Google Auth)
--- (users of the application)
--- Currently the system is matching against e-mail.
--- For Google Auth it could be better to match against "sub"
--- (subject id) to support user e-mail changes.
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     email TEXT UNIQUE NOT NULL,
@@ -38,8 +30,6 @@ CREATE TABLE IF NOT EXISTS user_roles (
 );
 
 -- Families table
--- Note a family doesn't have a name at the moment - how it's displayed on the
--- UI is currently defined by the `parents` that belong to that family.
 CREATE TABLE IF NOT EXISTS families (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -69,9 +59,7 @@ CREATE TABLE IF NOT EXISTS children (
     group2_start_date DATE,
     hort_start_date DATE,
     exit_date DATE,
-    -- TODO this may be redundant. We may want to merge this with the 
-    -- start_dates.
-    start_group INTEGER, -- 1: Kleine Gruppe, 2: Grosse Gruppe, 3: Hort
+    start_group INTEGER,
     notes TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -82,29 +70,22 @@ CREATE TABLE IF NOT EXISTS audit_log (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     transaction_id UUID NOT NULL,
     family_id UUID REFERENCES families(id) ON DELETE SET NULL,
-    entity_type TEXT NOT NULL, -- 'family', 'parent', 'child', 'hygiene_event', 'th_membership'
+    entity_type TEXT NOT NULL,
     entity_id UUID NOT NULL,
-    operation TEXT NOT NULL, -- 'INSERT', 'UPDATE', 'DELETE'
-    -- JSON snapshot of the entity model:
-    --   INSERT: before = null, after = new state
-    --   UPDATE: before = old state, after = new state
-    --   DELETE: before = old state, after = null
+    operation TEXT NOT NULL,
     before_snapshot JSONB,
     after_snapshot JSONB,
     changed_by UUID REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Incremental column migrations for audit_log
--- TODO: Remove this
 ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS before_snapshot JSONB;
 ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS after_snapshot JSONB;
 
--- Index for history lookup
 CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log (entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_family ON audit_log (family_id);
 
--- Trigger to update updated_at timestamp
+-- +goose StatementBegin
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -112,6 +93,7 @@ BEGIN
     RETURN NEW;
 END;
 $$ language 'plpgsql';
+-- +goose StatementEnd
 
 DROP TRIGGER IF EXISTS update_users_updated_at ON users;
 CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
@@ -158,5 +140,13 @@ INSERT INTO roles (id, name, description, permissions) VALUES
     ('caregiver', 'Caregiver', 'Child and hygiene tracking', '["families.all.read", "children.all.write", "hygiene.all.write"]')
 ON CONFLICT (id) DO NOTHING;
 
-
-
+-- +goose Down
+DROP TABLE IF EXISTS th_memberships CASCADE;
+DROP TABLE IF EXISTS hygiene_belehrung_events CASCADE;
+DROP TABLE IF EXISTS audit_log CASCADE;
+DROP TABLE IF EXISTS children CASCADE;
+DROP TABLE IF EXISTS parents CASCADE;
+DROP TABLE IF EXISTS families CASCADE;
+DROP TABLE IF EXISTS user_roles CASCADE;
+DROP TABLE IF EXISTS users CASCADE;
+DROP TABLE IF EXISTS roles CASCADE;
